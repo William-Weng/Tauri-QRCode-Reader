@@ -1,14 +1,11 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue';
-import QRCode from 'qrcode';
-import jsQR from 'jsqr';
 import { listen } from "@tauri-apps/api/event";
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { save } from '@tauri-apps/plugin-dialog';
+import QRCode from 'qrcode';
+import jsQR from 'jsqr';
 
-// https://v2.tauri.app/plugin/file-system/
-
-// --- State ---
 const text = ref('https://tauri.app');
 const originalText = ref(text.value);
 const isError = ref(false);
@@ -16,183 +13,258 @@ const qrCanvas = ref<HTMLCanvasElement | null>(null);
 const textInput = ref<HTMLInputElement | null>(null);
 const video = ref<HTMLVideoElement | null>(null);
 const isScanning = ref(false);
+
 let stream: MediaStream | null = null;
 let animationFrameId: number | null = null;
 
-// --- QR Code Generation ---
-watch([text, qrCanvas, isError], () => {
-  if (isError.value) return;
-  if (qrCanvas.value && text.value) {
-    QRCode.toCanvas(qrCanvas.value, text.value, { width: 280, margin: 2, color: { dark: '#333', light: '#FFFFFF' } }, (error) => {
-      if (error) console.error(error);
-    });
-  }
-}, { immediate: true });
-
-// --- Event Handlers ---
-function handleFocus() {
-  if (isError.value) {
-    isError.value = false;
-    text.value = originalText.value;
-  }
-}
-
-// --- QR Code Decoding ---
+// MARK: - public function
+/**
+ * 開始掃描
+ */
 async function startScan() {
-  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+
+    if (!navigator.mediaDevices) { return; }
+    if (!navigator.mediaDevices.getUserMedia) { return; }
+
     try {
+
       stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       isScanning.value = true;
+
       await nextTick();
-      if (video.value) {
-        video.value.srcObject = stream;
-        video.value.play();
-        tick();
-      }
-    } catch (error) {
-      console.error('Error accessing camera', error);
-      setErrorState('無法存取攝影機，請確認已授權。');
+      
+      if (!video.value) { setErrorState('無法存取攝影機，請確認已授權。'); return; }
+      
+      video.value.srcObject = stream;
+      video.value.play();
+      _tick();
+
+    } catch (error: Error | any) {
+      setErrorState(error.message || '無法存取攝影機，請確認已授權。');
     }
-  }
-}
-
-function stopScan() {
-  isScanning.value = false;
-  if (stream) {
-    stream.getTracks().forEach(track => track.stop());
-  }
-  if (animationFrameId) {
-    cancelAnimationFrame(animationFrameId);
-  }
-}
-
-function tick() {
-  if (video.value && video.value.readyState === video.value.HAVE_ENOUGH_DATA && isScanning.value) {
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    canvas.width = video.value.videoWidth;
-    canvas.height = video.value.videoHeight;
-    context?.drawImage(video.value, 0, 0, canvas.width, canvas.height);
-    const imageData = context?.getImageData(0, 0, canvas.width, canvas.height);
-    if (imageData) {
-      const code = jsQR(imageData.data, imageData.width, imageData.height);
-      if (code) {
-        handleFocus(); // Reset error state if any
-        text.value = code.data;
-        textInput.value?.focus();
-        stopScan();
-      } else {
-        // Keep scanning
-      }
-    }
-  }
-  if (isScanning.value) {
-    animationFrameId = requestAnimationFrame(tick);
-  }
-}
-
-function handleFileUpload(event: Event) {
-  
-  const target = event.target as HTMLInputElement;
-  const file = target.files?.[0];
-  
-  console.log('File selected:', file);
-
-  if (!file) return;
-
-  // Validate file type
-  if (!file.type.startsWith('image/')) {
-    setErrorState('請上傳圖片檔案。');
-    target.value = ''; // Reset input
-    return;
-  }
-
-  handleFocus(); // Reset previous error state
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const img = new Image();
-
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      context?.drawImage(img, 0, 0, canvas.width, canvas.height);
-      const imageData = context?.getImageData(0, 0, canvas.width, canvas.height);
-
-      if (imageData) {
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
-
-        console.log('Decoded QR code from image:', code);
-
-        if (code) {
-          text.value = code.data;
-          textInput.value?.focus();
-        } else {
-          setErrorState('在圖片中找不到 QRCode。');
-        }
-      }
-    };
-
-    img.src = e.target?.result as string;
-  };
-  reader.readAsDataURL(file);
-
-  // Reset the input value to allow selecting the same file again
-  target.value = '';
 }
 
 /**
- * 處理文件拖放事件
+ * 停止掃描
+ */
+function stopScan() {
+  
+  isScanning.value = false;
+
+  if (stream) { stream.getTracks().forEach(track => track.stop()); }
+  if (animationFrameId) { cancelAnimationFrame(animationFrameId); }
+}
+
+/**
+ * 設定錯誤訊息
+ * @param message - 錯誤訊息
+ */
+function setErrorState(message: string) {
+
+  originalText.value = text.value;
+  isError.value = true;
+  text.value = message;
+
+  textInput.value?.blur();
+}
+
+// MARK: - async function
+/**
+ * 處理文件拖放事件 (上傳圖片)
  */
 async function handleFileDragDrop() {
+
   listen('tauri://drag-drop', async (event: any) => {
-    if (event?.payload?.paths.length > 0) {
-      let filePath = event.payload.paths[0];
-      // 讀取檔案內容
-      const fileData = await readFile(filePath);
-      // 取得檔名
+
+    const filePath = event.payload.paths[0] as string;
+
+    if (event?.payload?.paths.length > 0, filePath.length > 0) {
+      
       const fileName = filePath.split('/').pop() || 'upload.png';
-      // 建立 File 物件
-      const file = new File([new Uint8Array(fileData)], fileName, { type: 'image/png' });
-      // 建立假的 input event
-      const fakeEvent = {
-        target: {
-          files: [file]
-        }
-      } as unknown as Event;
+      const fileType = 'image/png'
+      const file = await _fileMaker(filePath, fileName, fileType)
+      const fakeEvent = { target: { files: [file] }} as unknown as Event;
+
       handleFileUpload(fakeEvent);
     }
   });
 }
 
-function setErrorState(message: string) {
+/**
+ * 下載圖檔
+ * @param defaultPath - 要下載的文件路徑
+ * @returns `Promise<string | null>`
+ */
+async function downloadQRCode() {
+  
+  if (isScanning.value) { return; }
+  if (!qrCanvas.value) { return; }
 
-  console.log('Setting error state:', message);
+  const url = qrCanvas.value.toDataURL("image/png");
+  const uint8Array = await _downloadFile(url)
+  const filePath = await _savePNGImage('QR-Code.png')
 
-  originalText.value = text.value;
-  isError.value = true;
-  text.value = message;
-  textInput.value?.blur(); // Remove focus to ensure error color is visible
+  if (!filePath) return;
+  await writeFile(filePath, uint8Array);
 }
 
-async function downloadQRCode() {
-  if (!qrCanvas.value) return;
-  const url = qrCanvas.value.toDataURL("image/png");
+// MARK: - Event Handlers
+/**
+ * 處理錯誤訊息
+ */
+function handleFocus() {
+
+  if (!isError.value) { return }
+  
+  isError.value = false;
+  text.value = originalText.value;
+}
+
+/**
+ * 處理上傳圖片功能 (解析QRCode文字)
+ * @param event - Event
+ */
+function handleFileUpload(event: Event) {
+  
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0];
+  
+  if (isScanning.value) { stopScan(); }
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { setErrorState('請上傳圖片檔案。'); target.value = ''; return; }
+
+  handleFocus();
+
+  _parseQRCode(file, (code) => {
+
+    if (!code) { setErrorState('無法解析圖片中的 QRCode。'); target.value = ''; return; }
+
+    text.value = code;
+    textInput.value?.focus();
+  });
+
+  target.value = '';
+}
+
+// MARK: - private function
+/**
+ * 解析圖片上的QRCode文字
+ * @param file - File
+ * @param callback - 回調函式
+ */
+function _parseQRCode(file: File, callback: (result?: string) => void) {
+
+  const reader = new FileReader();
+
+  reader.onload = (event) => {
+
+    const img = new Image();
+
+    img.src = event.target?.result as string;
+    img.onload = () => {
+
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      
+      canvas.width = img.width;
+      canvas.height = img.height;
+      context?.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      const imageData = context?.getImageData(0, 0, canvas.width, canvas.height);
+
+      if (imageData) {
+        const code = jsQR(imageData.data, imageData.width, imageData.height);
+        callback(code?.data);
+      }
+    };
+  };
+
+  reader.readAsDataURL(file);
+}
+
+/**
+ * 掃描循環
+ */
+function _tick() {
+
+  const imageData = _qrcodeImageData();
+
+  if (imageData) {
+    
+    const code = jsQR(imageData.data, imageData.width, imageData.height);
+    
+    if (code) {
+      handleFocus();
+      text.value = code.data;
+      textInput.value?.focus();
+      stopScan();
+    }
+  }
+
+  if (isScanning.value) { animationFrameId = requestAnimationFrame(_tick); }
+}
+
+/**
+ * 取得 QRCode 影像資料
+ */
+function _qrcodeImageData() {
+
+  if (!video.value) { return; }
+  if (!isScanning.value) { return; }
+  if (video.value.readyState !== video.value.HAVE_ENOUGH_DATA) { return; }
+
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+
+  canvas.width = video.value.videoWidth;
+  canvas.height = video.value.videoHeight;
+  context?.drawImage(video.value, 0, 0, canvas.width, canvas.height);
+
+  const imageData = context?.getImageData(0, 0, canvas.width, canvas.height);
+  return imageData
+}
+
+/**
+ * 文件路徑 => File
+ * @param filePath - 要讀取的文件路徑
+ * @param fileName - 要儲存的文件名稱
+ * @param fileType - 要儲存的文件類型
+ * @returns `Promise<File>`
+ */
+async function _fileMaker(filePath: string, fileName: string, fileType: string) {
+  const fileData = await readFile(filePath);
+  const file = new File([new Uint8Array(fileData)], fileName, { type: fileType });
+  return file
+}
+
+/**
+ * 下載檔案 => Uint8Array
+ * @param url - 要下載的文件路徑
+ * @returns `Promise<Uint8Array<ArrayBuffer>>`
+ */
+async function _downloadFile(url: string) {
+
   const res = await fetch(url);
   const blob = await res.blob();
   const arrayBuffer = await blob.arrayBuffer();
   const uint8Array = new Uint8Array(arrayBuffer);
 
-  // 彈出儲存對話框
+  return uint8Array
+}
+
+/**
+ * 儲存PNG圖檔
+ * @param defaultPath - 要下載的文件路徑
+ * @returns `Promise<string | null>`
+ */
+async function _savePNGImage(defaultPath: string) {
+
   const filePath = await save({
-    defaultPath: "qrcode.png",
+    defaultPath: defaultPath,
     filters: [{ name: "PNG Image", extensions: ["png"] }]
   });
 
-  if (!filePath) return;
-  await writeFile(filePath, uint8Array);
+  return filePath
 }
 
 // MARK: - 生命週期
@@ -203,23 +275,25 @@ onMounted(() => {
 onUnmounted(() => {
   stopScan();
 });
+
+watch([text, qrCanvas, isError], async () => {
+  
+  if (isError.value) { return; }
+  if (!text.value) { return; }
+  if (!qrCanvas.value) { return; }
+
+  QRCode.toCanvas(qrCanvas.value, text.value, { width: 360, margin: 3, color: { dark: '#333', light: '#FFFFFF' } }, (error) => {
+    if (error) { setErrorState(error.message); }
+  });
+}, { immediate: true });
+
 </script>
-
-
-
 
 <template>
   <div class="app-container">
     <div class="top-section">
       <div class="input-group">
-        <input 
-          type="text" 
-          ref="textInput" 
-          v-model="text" 
-          placeholder="輸入文字或網址以產生 QRCode" 
-          :class="['text-input', { 'error': isError }]" 
-          @focus="handleFocus"
-        />
+        <input type="text" ref="textInput" v-model="text" placeholder="輸入文字或網址以產生 QRCode" :class="['text-input', { 'error': isError }]" @focus="handleFocus"/>
       </div>
       <div class="button-group">
         <button @click="startScan" :disabled="isScanning" class="btn">
@@ -241,13 +315,7 @@ onUnmounted(() => {
             <video ref="video" autoplay muted playsinline></video>
             <div class="scan-overlay"></div>
           </div>
-          <canvas 
-            v-else 
-            ref="qrCanvas" 
-            @click="downloadQRCode" 
-            style="cursor: pointer;" 
-            title="點擊下載 QRCode"
-          ></canvas>
+          <canvas v-else ref="qrCanvas" @click="downloadQRCode" style="cursor: pointer;" title="點擊下載 QRCode"></canvas>
         </div>
       </div>
     </div>
@@ -377,7 +445,7 @@ onUnmounted(() => {
 
 .display-box {
   width: 100%;
-  max-width: 320px;
+  max-width: 360px;
   aspect-ratio: 1 / 1;
   background-color: var(--card-background);
   border-radius: 1rem;
