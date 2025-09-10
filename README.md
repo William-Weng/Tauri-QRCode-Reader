@@ -1,2 +1,4 @@
-# -Tauri-QRCode-Reader
-簡易的QRCode描掃 / 產生器, 支援相機讀取…
+# Tauri-QRCode-Reader
+
+## 簡易的QRCode描掃 / 產生器, 支援相機讀取, 圖片輸出…
+
