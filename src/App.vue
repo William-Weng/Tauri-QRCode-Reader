@@ -2,7 +2,7 @@
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { listen } from "@tauri-apps/api/event";
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
-import { save } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 
@@ -75,18 +75,30 @@ function setErrorState(message: string) {
 async function handleFileDragDrop() {
 
   listen('tauri://drag-drop', async (event: any) => {
-
     const filePath = event.payload.paths[0] as string;
+    displayQRCode(filePath);
+  });
+}
 
-    if (event?.payload?.paths.length > 0, filePath.length > 0) {
-      
-      const fileName = filePath.split('/').pop() || 'upload.png';
-      const fileType = 'image/png'
-      const file = await _fileMaker(filePath, fileName, fileType)
-      const fakeEvent = { target: { files: [file] }} as unknown as Event;
+/**
+ * 顯示QRCode (解析圖片)
+ * @param filePath - 圖片路徑
+ */
+async function displayQRCode(filePath: string) {
 
-      handleFileUpload(fakeEvent);
-    }
+  const fileName = filePath.split('/').pop() || 'upload.png';
+  const fileType = 'image/png';
+  const file = await _fileMaker(filePath, fileName, fileType);
+
+  if (isScanning.value) { stopScan(); }
+  if (!file) return;
+
+  handleFocus();
+
+  _parseQRCode(file, (code) => {
+    if (!code) { setErrorState('無法解析圖片中的 QRCode。'); return; }
+    text.value = code;
+    textInput.value?.focus();
   });
 }
 
@@ -122,28 +134,16 @@ function handleFocus() {
 
 /**
  * 處理上傳圖片功能 (解析QRCode文字)
- * @param event - Event
  */
-function handleFileUpload(event: Event) {
-  
-  const target = event.target as HTMLInputElement;
-  const file = target.files?.[0];
-  
-  if (isScanning.value) { stopScan(); }
-  if (!file) return;
-  if (!file.type.startsWith('image/')) { setErrorState('請上傳圖片檔案。'); target.value = ''; return; }
+async function handleFileUpload() {
 
-  handleFocus();
-
-  _parseQRCode(file, (code) => {
-
-    if (!code) { setErrorState('無法解析圖片中的 QRCode。'); target.value = ''; return; }
-
-    text.value = code;
-    textInput.value?.focus();
+  const filePath = await open({
+    multiple: false,
+    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "bmp", "gif"] }]
   });
 
-  target.value = '';
+  if (!filePath || typeof filePath !== 'string') return;
+  displayQRCode(filePath);
 }
 
 // MARK: - private function
@@ -302,10 +302,9 @@ watch([text, qrCanvas, isError], async () => {
         <button @click="stopScan" :disabled="!isScanning" class="btn btn-danger">
           <i class="icon-stop"></i> 停止掃描
         </button>
-        <label for="file-upload" class="btn btn-secondary">
+        <button @click="handleFileUpload" class="btn btn-secondary">
           <i class="icon-upload"></i> 上傳圖片
-        </label>
-        <input id="file-upload" type="file" accept="image/*" @change="handleFileUpload" style="display: none;" />
+        </button>
       </div>
     </div>
     <div class="bottom-section">
