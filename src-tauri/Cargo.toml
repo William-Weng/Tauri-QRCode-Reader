@@ -1,6 +1,6 @@
 [package]
 name = "QRCode閱讀器"
-version = "0.1.1"
+version = "0.1.2"
 description = "A QRCode Reader"
 authors = ["Willam"]
 edition = "2021"

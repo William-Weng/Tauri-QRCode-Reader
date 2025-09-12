@@ -14,6 +14,14 @@ const textInput = ref<HTMLInputElement | null>(null);
 const video = ref<HTMLVideoElement | null>(null);
 const isScanning = ref(false);
 
+const SupportImageTypes = {
+  "png": "image/png",
+  "jpg": "image/jpeg",
+  "jpeg": "image/jpeg",
+  "bmp": "image/bmp",
+  "gif": "image/gif",
+}
+
 let stream: MediaStream | null = null;
 let animationFrameId: number | null = null;
 
@@ -87,16 +95,18 @@ async function handleFileDragDrop() {
 async function displayQRCode(filePath: string) {
 
   const fileName = filePath.split('/').pop() || 'upload.png';
-  const fileType = 'image/png';
-  const file = await _fileMaker(filePath, fileName, fileType);
+  const file = await _fileMaker(filePath, fileName);
 
   if (isScanning.value) { stopScan(); }
+  if (!file.type.startsWith('image/')) { setErrorState('僅支援圖片格式的檔案。'); return; }
   if (!file) return;
 
   handleFocus();
 
   _parseQRCode(file, (code) => {
+
     if (!code) { setErrorState('無法解析圖片中的 QRCode。'); return; }
+
     text.value = code;
     textInput.value?.focus();
   });
@@ -137,9 +147,11 @@ function handleFocus() {
  */
 async function handleFileUpload() {
 
+  const extensions = Object.keys(SupportImageTypes);
+
   const filePath = await open({
     multiple: false,
-    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "bmp", "gif"] }]
+    filters: [{ name: "Images", extensions: extensions }]
   });
 
   if (!filePath || typeof filePath !== 'string') return;
@@ -180,6 +192,30 @@ function _parseQRCode(file: File, callback: (result?: string) => void) {
   };
 
   reader.readAsDataURL(file);
+}
+
+/**
+ * 判斷圖片的MIME類型
+ * @param fileData - 圖片的ArrayBuffer資料
+ * @returns `Promise<string>` - MIME類型
+ */
+async function _imageMimeType(fileData: any): Promise<string> {
+  
+  const arr = new Uint8Array(fileData);
+
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (arr[0] === 0x89 && arr[1] === 0x50 && arr[2] === 0x4E && arr[3] === 0x47) { return SupportImageTypes["png"]; }
+  
+  // JPEG: FF D8 FF
+  if (arr[0] === 0xFF && arr[1] === 0xD8 && arr[2] === 0xFF) { return SupportImageTypes["jpg"]; }
+  
+  // GIF: 47 49 46 38
+  if (arr[0] === 0x47 && arr[1] === 0x49 && arr[2] === 0x46 && arr[3] === 0x38) { return SupportImageTypes["gif"]; }
+  
+  // BMP: 42 4D
+  if (arr[0] === 0x42 && arr[1] === 0x4D) { return SupportImageTypes["bmp"]; }
+
+  return 'application/octet-stream';
 }
 
 /**
@@ -228,12 +264,13 @@ function _qrcodeImageData() {
  * 文件路徑 => File
  * @param filePath - 要讀取的文件路徑
  * @param fileName - 要儲存的文件名稱
- * @param fileType - 要儲存的文件類型
  * @returns `Promise<File>`
  */
-async function _fileMaker(filePath: string, fileName: string, fileType: string) {
+async function _fileMaker(filePath: string, fileName: string) {
+  
   const fileData = await readFile(filePath);
-  const file = new File([new Uint8Array(fileData)], fileName, { type: fileType });
+  const mine = await _imageMimeType(fileData)
+  const file = new File([new Uint8Array(fileData)], fileName, { type: mine });
   return file
 }
 
