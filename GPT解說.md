@@ -104,5 +104,4 @@ const stream = await navigator.mediaDevices.getUserMedia({
 const devices = await navigator.mediaDevices.enumerateDevices();
 const cameras = devices.filter(d => d.kind === 'videoinput');
 const selectedDeviceId = cameras[1].deviceId;
-stream = await navigator.mediaDevices.getUserMedia({
-  video: { deviceId: { exact: selectedDeviceId
+stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: selectedDeviceId }}

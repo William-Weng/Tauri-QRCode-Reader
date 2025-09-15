@@ -5,6 +5,7 @@ import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { open, save } from '@tauri-apps/plugin-dialog';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
+import Swal from 'sweetalert2'
 
 const text = ref('https://tauri.app');
 const originalText = ref(text.value);
@@ -13,6 +14,9 @@ const qrCanvas = ref<HTMLCanvasElement | null>(null);
 const textInput = ref<HTMLInputElement | null>(null);
 const video = ref<HTMLVideoElement | null>(null);
 const isScanning = ref(false);
+const selectedCamera = ref<string>('');
+const scaleX = ref(-1);
+const scaleY = ref(1);
 
 const SupportImageTypes = {
   "png": "image/png",
@@ -30,26 +34,33 @@ let animationFrameId: number | null = null;
  * 開始掃描
  */
 async function startScan() {
+  if (!navigator.mediaDevices) { return; }
+  if (!navigator.mediaDevices.getUserMedia) { return; }
 
-    if (!navigator.mediaDevices) { return; }
-    if (!navigator.mediaDevices.getUserMedia) { return; }
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const cameras = devices.filter(d => d.kind === 'videoinput');
 
-    try {
+  if (cameras.length === 0) { setErrorState('沒有任何可以使用的錄影鏡頭'); return; }
+  if (cameras.length === 1) { selectedCamera.value = cameras[0].deviceId; return _startScan(selectedCamera.value); }
 
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      isScanning.value = true;
+  const inputOptions: Record<string, string> = {};
+  cameras.forEach((cam, idx) => {
+    inputOptions[cam.deviceId] = cam.label || `Camera ${idx + 1}`;
+  });
 
-      await nextTick();
-      
-      if (!video.value) { setErrorState('無法存取攝影機，請確認已授權。'); return; }
-      
-      video.value.srcObject = stream;
-      video.value.play();
-      _tick();
+  const { value: deviceId } = await Swal.fire({
+    title: '選擇攝影機',
+    input: 'select',
+    inputOptions,
+    inputPlaceholder: '請選擇攝影機',
+    showCancelButton: true,
+    confirmButtonText: '開始掃描',
+    cancelButtonText: '取消'
+  });
 
-    } catch (error: Error | any) {
-      setErrorState(error.message || '無法存取攝影機，請確認已授權。');
-    }
+  if (!deviceId) return;
+  selectedCamera.value = deviceId;
+  _startScan(deviceId);
 }
 
 /**
@@ -61,6 +72,11 @@ function stopScan() {
 
   if (stream) { stream.getTracks().forEach(track => track.stop()); }
   if (animationFrameId) { cancelAnimationFrame(animationFrameId); }
+
+  nextTick(() => {
+    if (text.value === '') { text.value = originalText.value; }
+    textInput.value?.focus();
+  });
 }
 
 /**
@@ -74,6 +90,20 @@ function setErrorState(message: string) {
   text.value = message;
 
   textInput.value?.blur();
+}
+
+/**
+ * 切換水平鏡像顯示
+ */
+function toggleScaleX() {
+  scaleX.value = scaleX.value === 1 ? -1 : 1;
+}
+
+/**
+ * 切換垂直鏡像顯示
+ */
+function toggleScaleY() {
+  scaleY.value = scaleY.value === 1 ? -1 : 1;
 }
 
 // MARK: - async function
@@ -192,6 +222,30 @@ function _parseQRCode(file: File, callback: (result?: string) => void) {
   };
 
   reader.readAsDataURL(file);
+}
+
+/**
+ * 開始掃描
+ * @param deviceId - 攝影機裝置ID
+ */
+async function _startScan(deviceId: string) {
+  
+  if (isScanning.value) { return; }
+  if (stream) { stream.getTracks().forEach(track => track.stop()); }
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+    isScanning.value = true;
+
+    await nextTick();
+    if (!video.value) { setErrorState('無法存取攝影機，請確認已授權。'); return; }
+
+    video.value.srcObject = stream;
+    video.value.play();
+    _tick();
+  } catch (error: Error | any) {
+    setErrorState(error.message || '無法存取攝影機，請確認已授權。');
+  }
 }
 
 /**
@@ -348,11 +402,19 @@ watch([text, qrCanvas, isError], async () => {
       <div class="display-area">
         <div class="display-box">
           <div class="video-preview" v-if="isScanning">
-            <video ref="video" autoplay muted playsinline></video>
+            <video ref="video" autoplay muted playsinline :style="`transform: scaleX(${scaleX}) scaleY(${scaleY}); width: 100%; height: 100%; object-fit: cover;`"/>
             <div class="scan-overlay"></div>
           </div>
           <canvas v-else ref="qrCanvas" @click="downloadQRCode" style="cursor: pointer;" title="點擊下載 QRCode"></canvas>
         </div>
+      </div>
+      <div class="direction-buttons" v-if="isScanning">
+        <button @click="toggleScaleX" class="btn btn-secondary" title="切換水平">
+          <i class="fa fa-arrows-h"></i>
+        </button>
+        <button @click="toggleScaleY" class="btn btn-secondary" title="切換垂直">
+          <i class="fa fa-arrows-v"></i>
+        </button>
       </div>
     </div>
   </div>
@@ -492,6 +554,30 @@ watch([text, qrCanvas, isError], async () => {
   overflow: hidden;
 }
 
+.direction-buttons {
+  position: absolute;
+  right: 2rem;
+  bottom: 2rem;
+  display: flex;
+  flex-direction: row;
+  gap: 1rem;
+  z-index: 10;
+}
+
+.direction-buttons .btn {
+  min-width: 24px;
+  padding: 0.5rem 0.5rem;
+  font-size: 1.2rem;
+  border-radius: 50%;
+  justify-content: center;
+  align-items: center;
+  gap: 0;
+}
+
+.bottom-section {
+  position: relative;
+}
+
 .video-preview {
   position: relative;
   width: 100%;
@@ -502,7 +588,7 @@ watch([text, qrCanvas, isError], async () => {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scaleX(-1);
+  transform: scaleX(-1) scaleY(1);
 }
 
 .scan-overlay {
