@@ -8,4 +8,4 @@ npm install
 npm run tauri build
 ```
 
-https://github.com/user-attachments/assets/012d222b-2e0a-4bf8-a643-969eff49e0ca
+https://github.com/user-attachments/assets/09640d42-1e9a-4992-91c1-639a00091482
