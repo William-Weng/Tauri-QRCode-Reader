@@ -1,3 +1,5 @@
+# ⚠️ Tauri-QRCode-Reader 已停止維護
+
 ## [簡易的QRCode描掃 / 產生器, 支援相機讀取, 圖片輸出…](https://v2.tauri.app/plugin/file-system/)
 
 ## [安裝執行](https://william-weng.github.io/tags/rust/)
